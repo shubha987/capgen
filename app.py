@@ -202,42 +202,61 @@ def generate_caption(model, image_features):
     
     # Define parameters
     max_length = 34  # Maximum sequence length (from model input shape)
-    start_token = tokenizer.word_index.get('startseq', 1)
-    end_token = tokenizer.word_index.get('endseq', 2)
     
-    # Initialize the sequence with the start token
-    input_seq = np.zeros((1, max_length))
-    input_seq[0, 0] = start_token
+    # Check what tokens your tokenizer actually has
+    has_start_seq = 'startseq' in tokenizer.word_index
+    has_start = 'start' in tokenizer.word_index
+    has_end_seq = 'endseq' in tokenizer.word_index
+    has_end = 'end' in tokenizer.word_index
     
-    # Initialize the result
+    # Determine the actual start and end tokens used in your model
+    start_word = 'start' if has_start else 'startseq'
+    end_word = 'end' if has_end else 'endseq'
+    
+    # Use the more notebook-like approach for caption generation
+    in_text = start_word
     caption = []
     
     # Generate the caption word by word
     try:
-        for i in range(max_length - 1):
-            # Predict the next word
-            predictions = model.predict([image_features, input_seq], verbose=0)
+        # Generate until we reach end token or max length
+        for i in range(max_length):
+            # Tokenize the current text
+            sequence = tokenizer.texts_to_sequences([in_text])[0]
             
-            # Get the predicted word index for the current position
+            # Pad the sequence to required length
+            sequence = tf.keras.preprocessing.sequence.pad_sequences(
+                [sequence], maxlen=max_length
+            )
+            
+            # Predict next word
+            predictions = model.predict([image_features, sequence], verbose=0)
+            
+            # Get the index of the predicted word
             predicted_index = np.argmax(predictions[0])
             
-            # Convert the index to a word
-            predicted_word = None
-            for word, index in tokenizer.word_index.items():
-                if index == predicted_index:
-                    predicted_word = word
-                    break
+            # Convert index to word
+            predicted_word = tokenizer.index_word.get(predicted_index, '')
             
-            # If end token is predicted or max length reached, stop
-            if predicted_word == 'endseq' or i == max_length - 2:
+            # If end token or max length reached, stop
+            if predicted_word == end_word or i >= max_length-1:
                 break
                 
-            # Add the predicted word to the caption
-            if predicted_word and predicted_word != 'startseq':
-                caption.append(predicted_word)
+            # Check for repetition - if the last 3 words are the same as the current word, skip it
+            if len(caption) >= 3 and caption[-1] == predicted_word and caption[-2] == predicted_word and caption[-3] == predicted_word:
+                # Try the second most likely word instead
+                second_best_index = np.argsort(predictions[0])[-2]
+                predicted_word = tokenizer.index_word.get(second_best_index, '')
+                
+                # If still repeating, just break
+                if len(caption) >= 3 and caption[-1] == predicted_word and caption[-2] == predicted_word:
+                    break
             
-            # Update the input sequence for the next prediction
-            input_seq[0, i+1] = predicted_index
+            # Add the predicted word to the caption and input text
+            if predicted_word and predicted_word != start_word:
+                caption.append(predicted_word)
+                in_text += ' ' + predicted_word
+    
     except Exception as e:
         st.error(f"Error in caption generation: {str(e)}")
         return f"Error generating caption: {str(e)}"
